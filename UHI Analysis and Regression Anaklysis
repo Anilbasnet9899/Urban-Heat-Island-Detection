@@ -1,0 +1,111 @@
+# Analysis years (excluding 2019)
+years = [y for y in range(2014, 2025) if y != 2019]
+
+urban_lst_means = []
+rural_lst_means = []
+urban_lst_images = []
+rural_lst_images = []
+uhi_images = []
+# Calculate mean LST and UHI for each year
+for year in years:
+    # Urban image
+    urban_image = lst_collection.filterDate(f'{year}-06-01', f'{year}-08-31').mean().clip(urban_roi)
+    urban_mean = urban_image.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=urban_roi,
+        scale=30,
+        maxPixels=1e9
+    ).get('LST')
+    urban_value = urban_mean.getInfo()
+    urban_lst_means.append(urban_value if urban_value is not None else np.nan)
+    urban_lst_images.append(urban_image)
+
+    # Rural image
+    rural_image = lst_collection.filterDate(f'{year}-06-01', f'{year}-08-31').mean().clip(rural_roi)
+    rural_mean = rural_image.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=rural_roi,
+        scale=30,
+        maxPixels=1e9
+    ).get('LST')
+    rural_value = rural_mean.getInfo()
+    rural_lst_means.append(rural_value if rural_value is not None else np.nan)
+    rural_lst_images.append(rural_image)
+
+    # UHI image
+    uhi_image = urban_image.subtract(rural_image).rename('UHI')
+    uhi_images.append(uhi_image)
+
+    print(f"{year} - Urban: {urban_value:.2f}°C, Rural: {rural_value:.2f}°C, UHI: {(urban_value - rural_value):.2f}°C")
+
+# Convert to numpy arrays
+urban_lst_means = np.array(urban_lst_means)
+rural_lst_means = np.array(rural_lst_means)
+uhi_intensity = urban_lst_means - rural_lst_means
+
+from scipy.stats import linregress
+# Regression analysis
+valid = ~(np.isnan(urban_lst_means) | np.isnan(rural_lst_means))
+years_valid = np.array(years)[valid]
+uhi_valid = uhi_intensity[valid]
+slope, intercept, r_value, p_value, stderr = linregress(years_valid, uhi_valid)
+trend = slope * np.array(years) + intercept
+r_squared = r_value ** 2
+
+# Plot UHI Intensity
+plt.figure(figsize=(10, 6))
+plt.plot(years, uhi_intensity, marker='o', linestyle='-', color='purple', label='UHI Intensity (ΔT)')
+plt.plot(years, trend, linestyle='--', color='orange', 
+         label=f'Trend: {slope:.3f}°C/year, p={p_value:.3f}, R²={r_squared:.3f}')
+plt.title('Urban Heat Island (UHI) Intensity in Calgary (2014–2024, excl. 2019)')
+plt.xlabel('Year')
+plt.ylabel('ΔT (°C)')
+plt.grid(True)
+plt.legend()
+plt.xticks(years)
+plt.tight_layout()
+plt.show()
+
+print(f"Regression slope: {slope:.3f}°C/year")
+print(f"P-value: {p_value:.3f}")
+print(f"R-squared: {r_squared:.3f}")
+
+# ✅ Add UHI Layer to Map
+Map = geemap.Map()
+Map.centerObject(urban_roi, 10)
+
+# Convert to numpy arrays (if not already)
+urban_lst_means = np.array(urban_lst_means)
+
+# Remove NaN values for regression
+valid_indices = ~np.isnan(urban_lst_means)
+years_valid = np.array(years)[valid_indices]
+urban_lst_valid = urban_lst_means[valid_indices]
+
+# Perform linear regression on urban LST
+slope, intercept, r_value, p_value, stderr = linregress(years_valid, urban_lst_valid)
+trend = slope * np.array(years) + intercept
+r_squared = r_value ** 2
+
+# Plot the urban LST with regression line
+plt.figure(figsize=(10, 6))
+plt.plot(years, urban_lst_means, marker='o', linestyle='-', color='purple', label='Urban Mean LST')
+plt.plot(years, trend, linestyle='--', color='orange', 
+         label=f'Trend (slope: {slope:.3f}°C/year, p={p_value:.3f}, R²={r_squared:.3f})')
+plt.title('Urban Mean LST in Downtown Calgary (2014-2024, excl. 2019)')
+plt.xlabel('Year')
+plt.ylabel('Urban Mean LST (°C)')
+plt.grid(True)
+plt.legend()
+plt.xticks(years)
+plt.tight_layout()
+
+# Save and display the plot
+plt.savefig('urban_lst_trend.png', dpi=300)
+plt.show()
+
+# Print regression statistics
+print(f"Regression slope: {slope:.3f}°C/year")
+print(f"P-value: {p_value:.3f}")
+print(f"R-squared: {r_squared:.3f}")
+
