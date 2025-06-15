@@ -1,0 +1,71 @@
+import geemap
+
+# Step 6: Create a classified UTFVI image collection for visualization
+classified_utfvi_images = []
+for utfvi_img, year in zip(utfvi_images, years):
+    # Create a mask for the urban_roi and valid pixels
+    roi_mask = ee.Image.constant(1).clip(urban_roi).mask()
+    utfvi_mask = utfvi_img.mask()
+    combined_mask = roi_mask.And(utfvi_mask)
+
+    # Classify UTFVI into discrete categories
+    classified_img = ee.Image(0).int()
+    classified_img = classified_img.where(utfvi_img.lt(0), 1)  # Good
+    classified_img = classified_img.where(utfvi_img.gte(0).And(utfvi_img.lte(0.005)), 2)  # Moderate
+    classified_img = classified_img.where(utfvi_img.gt(0.005), 3)  # Poor
+    classified_img = classified_img.rename('classified_utfvi')
+
+    # Apply the mask to set pixels outside urban_roi or with null values to null
+    classified_img = classified_img.updateMask(combined_mask)
+
+    # Add a time property for the time slider
+    classified_img = classified_img.set('system:time_start', ee.Date(f'{year}-07-01').millis())
+    classified_utfvi_images.append(classified_img)
+
+# Create an ImageCollection from the classified images
+classified_utfvi_collection = ee.ImageCollection(classified_utfvi_images)
+
+# Step 7: Define visualization parameters for the classified image
+classified_viz_params = {
+    'min': 1,
+    'max': 3,
+    'palette': ['#00FF00', '#FFFF00', '#FF0000'],  # Green, Yellow, Red
+    'opacity': 0.8
+}
+
+# Step 8: Create a map for UTFVI visualization
+UTFVI_Map = geemap.Map()
+UTFVI_Map.centerObject(urban_roi, 14)
+
+# Step 9: Add the classified UTFVI layer
+if classified_utfvi_images:
+    UTFVI_Map.addLayer(classified_utfvi_collection.first(), classified_viz_params, 'UTFVI')
+
+    # Add a time slider to toggle between years
+    valid_years = [year for year, urban_mean in zip(years, urban_lst_means) if not np.isnan(urban_mean)]
+    UTFVI_Map.add_time_slider(
+        ee_object=classified_utfvi_collection,
+        vis_params=classified_viz_params,
+        layer_name='UTFVI',
+        labels=[str(year) for year in valid_years],
+        time_interval=3,
+        loop=False
+    )
+
+    # Add a legend to indicate thermal comfort categories
+    legend_dict = {
+        'Good (<0)': '#00FF00',  # Green
+        'Moderate (0-0.005)': '#FFFF00',  # Yellow
+        'Poor (>0.005)': '#FF0000'  # Red
+    }
+    UTFVI_Map.add_legend(
+        title='Thermal Comfort',
+        legend_dict=legend_dict,
+        position='bottomright'
+    )
+
+# Step 10: Add urban_roi boundary
+UTFVI_Map.addLayer(urban_roi, {'color': 'blue'}, 'Downtown Calgary')
+
+# Step 11: Display the map
+UTFVI_Map
