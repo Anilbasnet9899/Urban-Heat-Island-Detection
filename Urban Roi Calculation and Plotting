@@ -1,0 +1,180 @@
+import ee
+import numpy as np
+
+# Step 1: Calculate the total area of urban_roi
+total_area_km2 = urban_roi.area().divide(1e6).getInfo()  # Area in km²
+print(f"Total Area of Urban ROI: {total_area_km2:.2f} km²")
+
+# Step 2: Recalculate mean LST for each year, ensuring images are clipped to urban_roi
+urban_lst_means = []
+clipped_urban_lst_images = []
+for urban_img, year in zip(urban_lst_images, years):
+    clipped_img = urban_img.clip(urban_roi)
+    clipped_urban_lst_images.append(clipped_img)
+    mean_lst = clipped_img.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=urban_roi,
+        scale=30,
+        maxPixels=1e13,
+        bestEffort=False
+    ).get('LST').getInfo()
+    urban_lst_means.append(mean_lst)
+    print(f"Year {year}: Mean LST = {mean_lst:.2f}°C")
+
+# Step 3: Recalculate UTFVI
+utfvi_images = []
+for clipped_img, mean_lst, year in zip(clipped_urban_lst_images, urban_lst_means, years):
+    if np.isnan(mean_lst):
+        print(f"Year {year}: Skipping due to NaN in urban LST mean")
+        continue
+    mean_lst_img = ee.Image.constant(mean_lst)
+    clipped_img = clipped_img.reproject(crs=clipped_img.projection(), scale=30)
+    utfvi_img = clipped_img.subtract(mean_lst_img).divide(mean_lst_img).rename('UTFVI')
+    utfvi_img = utfvi_img.clip(urban_roi)
+    # Set a timestamp for the time slider (for visualization later)
+    timestamp = ee.Date(f'{year}-07-01').millis()
+    utfvi_img = utfvi_img.set('system:time_start', timestamp)
+    utfvi_images.append(utfvi_img)
+    print(f"Recalculated UTFVI for year {year}")
+
+# Step 4: Calculate areas for each thermal comfort category
+pixel_area_m2 = 30 * 30  # Known pixel area at 30m resolution: 900 m²
+categories = {
+    'Good': {'range': (-float('inf'), 0), 'areas': []},
+    'Moderate': {'range': (0, 0.005), 'areas': []},
+    'Poor': {'range': (0.005, float('inf')), 'areas': []}
+}
+
+for utfvi_img, year in zip(utfvi_images, years):
+    # Get the projection of the utfvi_img
+    projection = utfvi_img.projection().getInfo()
+    crs = projection['crs']
+    transform = projection['transform']
+    
+    # Reproject the urban_roi to the same projection as the utfvi_img
+    urban_roi_reprojected = urban_roi.transform(crs, 1)  # 1-meter error tolerance
+
+    # Create a mask for valid pixels within urban_roi
+    roi_mask = ee.Image.constant(1).clip(urban_roi_reprojected).mask()
+    utfvi_mask = utfvi_img.mask()  # Mask for non-null pixels in utfvi_img
+    combined_mask = roi_mask.And(utfvi_mask)  # Combine masks to ensure only valid pixels within urban_roi are counted
+
+    # Classify UTFVI into discrete categories
+    category_img = ee.Image(0).int()
+    category_img = category_img.where(utfvi_img.lt(0), 1)  # Good
+    category_img = category_img.where(utfvi_img.gte(0).And(utfvi_img.lte(0.005)), 2)  # Moderate
+    category_img = category_img.where(utfvi_img.gt(0.005), 3)  # Poor
+    category_img = category_img.rename('category')
+
+    # Apply the combined mask to the category image
+    category_img = category_img.updateMask(combined_mask)
+
+    # Reproject category_img to ensure consistent scale
+    category_img = category_img.reproject(crs=crs, scale=30)
+
+    # Calculate the frequency of each category
+    category_counts = category_img.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram(),
+        geometry=urban_roi_reprojected,
+        scale=30,
+        maxPixels=1e13,
+        bestEffort=False
+    ).get('category').getInfo()
+
+    # Extract pixel counts for each category
+    good_pixel_count = float(category_counts.get('1', 0))
+    moderate_pixel_count = float(category_counts.get('2', 0))
+    poor_pixel_count = float(category_counts.get('3', 0))
+
+    # Calculate total valid pixels
+    total_pixel_count = good_pixel_count + moderate_pixel_count + poor_pixel_count
+    print(f"Year {year}: Total valid pixels in urban_roi: {total_pixel_count}")
+
+    # Calculate areas
+    good_area_m2 = good_pixel_count * pixel_area_m2
+    good_area_km2 = good_area_m2 / 1e6
+    categories['Good']['areas'].append(good_area_km2)
+
+    moderate_area_m2 = moderate_pixel_count * pixel_area_m2
+    moderate_area_km2 = moderate_area_m2 / 1e6
+    categories['Moderate']['areas'].append(moderate_area_km2)
+
+    poor_area_m2 = poor_pixel_count * pixel_area_m2
+    poor_area_km2 = poor_area_m2 / 1e6
+    categories['Poor']['areas'].append(poor_area_km2)
+
+# Step 5: Summarize the results
+print(f"\nBreakdown of Thermal Comfort Categories:")
+print("Year | Good (km²) | Moderate (km²) | Poor (km²) | Total (km²) | Good (%) | Moderate (%) | Poor (%)")
+print("-" * 80)
+for i, year in enumerate(years):
+    good_area = categories['Good']['areas'][i]
+    moderate_area = categories['Moderate']['areas'][i]
+    poor_area = categories['Poor']['areas'][i]
+    total_calculated = good_area + moderate_area + poor_area
+    # Calculate percentages based on total valid pixels
+    good_percentage = (good_area / total_calculated) * 100 if total_calculated > 0 else 0
+    moderate_percentage = (moderate_area / total_calculated) * 100 if total_calculated > 0 else 0
+    poor_percentage = (poor_area / total_calculated) * 100 if total_calculated > 0 else 0
+    print(f"{year} | {good_area:.6f} | {moderate_area:.6f} | {poor_area:.6f} | {total_calculated:.6f} | {good_percentage:.2f}% | {moderate_percentage:.2f}% | {poor_percentage:.2f}%")
+
+import matplotlib.pyplot as plt
+
+# Data for the bar graph
+years = [2014, 2015, 2016, 2017, 2018, 2020, 2021, 2022, 2023, 2024]
+poor_percentages = [60.18, 55.85, 58.40, 59.16, 59.34, 53.67, 58.75, 60.18, 60.14, 61.57]
+
+# Create the bar graph
+plt.figure(figsize=(10, 6))  # Set the figure size (width, height)
+plt.bar(years, poor_percentages, color='red', edgecolor='black')
+
+# Customize the graph
+plt.title('Percentage Coverage of Poor Thermal Comfort (UTFVI > 0.005) in Downtown Calgary (2014–2024)', fontsize=12, pad=15)
+plt.xlabel('Year', fontsize=10)
+plt.ylabel('Poor Category Coverage (%)', fontsize=10)
+plt.xticks(years, rotation=45)  # Rotate x-axis labels for better readability
+plt.ylim(0, 70)  # Set y-axis range to accommodate the higher percentages
+plt.grid(axis='y', linestyle='--', alpha=0.7)  # Add a grid for better readability
+
+# Add percentage labels on top of each bar
+for i, percentage in enumerate(poor_percentages):
+    plt.text(years[i], percentage + 1, f'{percentage}%', ha='center', fontsize=9)
+
+# Adjust layout to prevent label cutoff
+plt.tight_layout()
+
+# Display the graph
+plt.show()
+
+import geopandas as gpd
+
+# Define the shapefile paths
+rural_shp_path = r'C:\Users\aneel\Desktop\MGIS\Geog 639\Project\Shapefiles\Rural1\Rural1.shp'
+
+# Read the rural shapefile using geopandas
+rural_gdf = gpd.read_file(rural_shp_path)
+
+# Check the original CRS (Coordinate Reference System) of the shapefile
+print("Original CRS:", rural_gdf.crs)
+
+# Reproject the shapefile to UTM Zone 11N (EPSG:32611) for accurate area calculation
+# UTM Zone 11N is appropriate for Calgary
+rural_gdf_utm = rural_gdf.to_crs(epsg=32611)
+
+# Calculate the area in square meters
+# The 'geometry' column contains the shapes (polygons), and .area computes the area for each feature
+rural_gdf_utm['area_m2'] = rural_gdf_utm['geometry'].area
+
+# Sum the areas if there are multiple polygons (in case Rural1 has more than one feature)
+total_area_m2 = rural_gdf_utm['area_m2'].sum()
+
+# Convert the area from square meters to square kilometers (1 km² = 1,000,000 m²)
+total_area_km2 = total_area_m2 / 1_000_000
+
+# Print the result
+print(f"Area of the rural reference region (Rural1): {total_area_km2:.4f} km²")
+
+# Create an interactive map centered on Calgary (approximate coordinates: -114.1, 51.0)
+Map = geemap.Map(center=[51.0, -114.1], zoom=10)
+Map.addLayer(rural_roi, {'color': 'red'}, 'Rural Reference Region (Rural1)')
+Map
