@@ -1,0 +1,56 @@
+import geopandas as gpd
+import ee
+import geemap
+import rasterio
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Initialize Earth Engine
+ee.Initialize()
+
+  # Define shapefile paths
+urban_shp_path = r'C:\Users\aneel\Desktop\MGIS\Geog 639\Project\Shapefiles\Downtown'
+rural_shp_path = r'C:\Users\aneel\Desktop\MGIS\Geog 639\Project\Shapefiles\Rural1'
+
+# Load shapefiles
+urban_gdf = gpd.read_file(urban_shp_path)
+rural_gdf = gpd.read_file(rural_shp_path)
+
+# Reproject to EPSG:4326 (WGS 84)
+urban_gdf = urban_gdf.to_crs(epsg=4326)
+rural_gdf = rural_gdf.to_crs(epsg=4326)
+
+# Extract geometry coordinates (assuming one polygon per shapefile)
+urban_coords = list(urban_gdf.geometry.iloc[0].exterior.coords)
+rural_coords = list(rural_gdf.geometry.iloc[0].exterior.coords)
+
+# Create EE Polygon geometries
+urban_roi = ee.Geometry.Polygon([urban_coords])
+rural_roi = ee.Geometry.Polygon([rural_coords])
+
+# Load and filter Landsat 8 LST data
+landsat = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+           .filterBounds(rural_roi)
+           .filterDate('2014-01-01', '2024-12-31')
+           .filter(ee.Filter.calendarRange(6, 8, 'month'))  # Summer months
+           .filter(ee.Filter.lt('CLOUD_COVER', 20))
+           .select('ST_B10'))
+# Function to convert LST to Celsius
+def to_celsius(image):
+    lst_celsius = image.multiply(0.00341802).add(149.0).subtract(273.15)
+    return lst_celsius.rename('LST').set('system:time_start', image.get('system:time_start'))
+lst_collection = landsat.map(to_celsius)
+# Load and filter Landsat 8 LST data
+landsat = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+           .filterBounds(urban_roi)
+           .filterDate('2014-01-01', '2024-12-31')
+           .filter(ee.Filter.calendarRange(6, 8, 'month'))  # Summer months
+           .filter(ee.Filter.lt('CLOUD_COVER', 20))
+           .select('ST_B10'))
+# Function to convert LST to Celsius
+def to_celsius(image):
+    lst_celsius = image.multiply(0.00341802).add(149.0).subtract(273.15)
+    return lst_celsius.rename('LST').set('system:time_start', image.get('system:time_start'))
+lst_collection = landsat.map(to_celsius)
+
