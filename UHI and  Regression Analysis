@@ -70,7 +70,7 @@ print(f"Regression slope: {slope:.3f}°C/year")
 print(f"P-value: {p_value:.3f}")
 print(f"R-squared: {r_squared:.3f}")
 
-# ✅ Add UHI Layer to Map
+# Add UHI Layer to Map
 Map = geemap.Map()
 Map.centerObject(urban_roi, 10)
 
@@ -87,7 +87,7 @@ slope, intercept, r_value, p_value, stderr = linregress(years_valid, urban_lst_v
 trend = slope * np.array(years) + intercept
 r_squared = r_value ** 2
 
-# Plot the urban LST with regression line
+# Plot the urban LST with a regression line
 plt.figure(figsize=(10, 6))
 plt.plot(years, urban_lst_means, marker='o', linestyle='-', color='purple', label='Urban Mean LST')
 plt.plot(years, trend, linestyle='--', color='orange', 
